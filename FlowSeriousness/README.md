@@ -30,6 +30,7 @@ strategy. Spec: https://claude.ai/artifact/V18JsvSv4Qcmt6MKn8Qish
 - **BOOK · TAPE**: λ in points per 100 contracts with its session tercile (THIN / NORMAL / THICK), vpin quartile,
   tempo-z (negative = fast), classification coverage, and the per-side intensity bars (bright = hot).
 - **Strip**: last 60 bars, effN at each close over the 0.5 / 1.0 guides, and the character cell under each bar.
+- The box sizes itself to its content; **Panel maximum height** and the chart panel only cap it. When space is short the strip goes first, then ribbon rows.
 - **CHARACTER CHANGES**: the ribbon of sealed changes with time; FLIP rows are the paid → absorbed reversals.
 - **Price markers**: triangles at sealed bursts (teal/coral paid, gold absorbed, hollow partial), rings at exhaustion,
   a violet diamond when a burst was given back, an underline when it happened at a level, and a LONG ▲ / SHORT ▼ / FLIP

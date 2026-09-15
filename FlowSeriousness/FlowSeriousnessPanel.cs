@@ -49,13 +49,13 @@ namespace NinjaTrader.NinjaScript.Indicators
                 Calculate = Calculate.OnEachTick;
                 IsOverlay = true; DrawOnPricePanel = true; DisplayInDataBox = true;
                 IsSuspendedWhileInactive = false; BarsRequiredToPlot = 0; PaintPriceMarkers = false;
-                BarVolume = 500; EffBars = 3; PermShort = 3; PermLong = 10;
+                BarVolume = 500; EffBars = 3; PermShort = 3; PermLong = 10; MinBurstMoveTicks = 2;
                 LambdaBars = 150; LambdaWarmup = 20; ResetLambdaAtRoll = false;
                 BurstFloor = 300; BurstMultiple = 2.5; AbsorbBelow = 0.5; ConfirmAbove = 1.0;
                 VpinBars = 20; TempoBars = 100; IntensityTau = 10; HotMultiple = 1.5; ExhaustLookback = 12;
                 ReversalBars = 12; InterestBars = 6; HoldMilliseconds = 800;
                 UseChartLevels = true; LevelToleranceTicks = 8;
-                PanelWidth = 640; DashboardHeight = 300; ShowMarkers = true; ShowStrip = true;
+                PanelWidth = 640; DashboardHeight = 420; ShowMarkers = true; ShowStrip = true;
                 ExportCsv = false;
                 AddPlot(Brushes.Transparent, "EffN"); AddPlot(Brushes.Transparent, "LambdaPts100"); AddPlot(Brushes.Transparent, "Permanence");
                 AddPlot(Brushes.Transparent, "Vpin"); AddPlot(Brushes.Transparent, "IntensityBuy"); AddPlot(Brushes.Transparent, "IntensitySell");
@@ -72,7 +72,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 tickSize = Instrument.MasterInstrument.TickSize;
                 KS.Settings s = new KS.Settings
                 {
-                    BarVolume = BarVolume, Tick = tickSize, EffBars = EffBars, PermShort = PermShort, PermLong = PermLong,
+                    BarVolume = BarVolume, Tick = tickSize, EffBars = EffBars, PermShort = PermShort, PermLong = PermLong, MinBurstMoveTicks = MinBurstMoveTicks,
                     LambdaBars = LambdaBars, LambdaWarmup = LambdaWarmup, ResetLambdaAtRoll = ResetLambdaAtRoll,
                     BurstFloor = BurstFloor, BurstMultiple = BurstMultiple, AbsorbBelow = AbsorbBelow, ConfirmAbove = ConfirmAbove,
                     VpinBars = VpinBars, TempoBars = TempoBars, IntensityTau = IntensityTau, HotMultiple = HotMultiple, ExhaustLookback = ExhaustLookback,
@@ -183,7 +183,16 @@ namespace NinjaTrader.NinjaScript.Indicators
             if (RenderTarget == null || ChartPanel == null || IsInHitTest || engine == null) return;
             KS.Reading r = engine.Latest; if (r == null) return;
             KS.FlowEvent[] events = engine.Events; KS.CharacterChange[] changes = engine.Changes;
-            float x = ChartPanel.X + 12, y = ChartPanel.Y + 10, w = Math.Min(ChartPanel.W - 24, PanelWidth), h = Math.Min(ChartPanel.H - 20, DashboardHeight);
+            // Layout, top to bottom: header, headline, mechanism, detail, three gauge cards, the strip, the ribbon, the footer.
+            // The box sizes itself to this stack; DashboardHeight and the chart panel only cap it. The strip goes first when
+            // space is short, then ribbon rows.
+            const float rowH = 16f, gaugeH = 74f, stripH = 70f;
+            float x = ChartPanel.X + 12, y = ChartPanel.Y + 10, w = Math.Min(ChartPanel.W - 24, PanelWidth);
+            float cap = Math.Min(ChartPanel.H - 20, DashboardHeight);
+            float fixedH = 8 + 34 + 26 + 16 + 16 + 6 + gaugeH + 12 + 16 + 6 + 18 + 4;   // everything except the strip and the ribbon rows
+            bool strip = ShowStrip && r.Strip.Length > 0 && fixedH + stripH + rowH <= cap;
+            int rows = (int)Math.Max(0, Math.Min(4, Math.Floor((cap - fixedH - (strip ? stripH : 0)) / rowH)));
+            float h = Math.Min(cap, fixedH + (strip ? stripH : 0) + rows * rowH);
             using (DxBrush bg = Brush(0x0B1220)) using (DxBrush card = Brush(0x131F30)) using (DxBrush line = Brush(0x24364B))
             using (DxBrush text = Brush(0xE8F0F7)) using (DxBrush muted = Brush(0x91A6BB)) using (DxBrush teal = Brush(0x38D8BA))
             using (DxBrush coral = Brush(0xFF7E87)) using (DxBrush gold = Brush(0xE9C46A)) using (DxBrush violet = Brush(0xB69CFF))
@@ -205,66 +214,70 @@ namespace NinjaTrader.NinjaScript.Indicators
                     {
                         int side = KS.Engine.SideOf(r.Character);
                         DxBrush sideBrush = side > 0 ? teal : side < 0 ? coral : muted;
-                        DxBrush sideDim = side > 0 ? tealDim : side < 0 ? coralDim : mutedDim;
                         Rect(x, y, w, h, bg); Rect(x, y, 3, h, r.Warm ? sideBrush : gold);
+                        float left = x + 17, innerW = w - 34, cy = y + 8;
                         // header
-                        Text("SERIOUSNESS", x + 17, y + 8, 150, 30, titleFont, text);
+                        Text("SERIOUSNESS", left, cy, 150, 30, titleFont, text);
                         string session = (Instrument == null ? "" : Instrument.FullName + "  ·  ") + BarVolume + "v  ·  " + (r.Warm ? r.Status : "WARMING");
-                        Text(session, x + 165, y + 16, w - 180, 18, smallRight, r.Warm ? muted : gold);
-                        // headline and interest
+                        Text(session, x + 165, cy + 8, w - 180, 18, smallRight, r.Warm ? muted : gold);
+                        cy += 34;
+                        // headline row, with the interest pill on the right when a change argues a side
+                        float pw = r.InterestSide != 0 ? Math.Min(w * 0.36f, 240) : 0, px = x + w - 17 - pw;
+                        float headW = pw > 0 ? px - 8 - left : innerW;
                         string mech = Mechanism(r.Character);
-                        Text(r.Headline, x + 17, y + 38, w * 0.66f, 26, headFont, r.Warm ? sideBrush : gold);
-                        if (r.Warm && mech.Length > 0) Text(mech, x + 17, y + 64, w * 0.66f, 16, small, muted);
-                        else Text(r.Detail, x + 17, y + 64, w - 34, 16, small, muted);
-                        if (r.Warm && mech.Length > 0) Text(r.Detail, x + 17, y + 80, w - 34, 16, small, muted);
-                        if (r.InterestSide != 0)
+                        Text(r.Headline, left, cy, headW, 26, headFont, r.Warm ? sideBrush : gold);
+                        if (pw > 0)
                         {
                             DxBrush ib = r.InterestSide > 0 ? teal : coral;
-                            float pw = Math.Min(w * 0.33f, 230), px = x + w - 17 - pw, py = y + 40;
-                            if (r.InterestAtLevel) { Pill(px, py, pw, 22, ib); Text("ENTRY INTERESTING", px + 10, py + 4, pw - 16, 16, smallBold, dark); }
-                            else { PillOutline(px, py, pw, 22, ib); Text("INTERESTING · NOT AT LEVEL", px + 10, py + 4, pw - 16, 16, smallBold, ib); }
-                            Text(r.InterestText, px, py + 25, pw, 16, smallRight, ib);
+                            if (r.InterestAtLevel) { Pill(px, cy + 2, pw, 22, ib); Text("ENTRY INTERESTING", px + 10, cy + 6, pw - 16, 16, smallBold, dark); }
+                            else { PillOutline(px, cy + 2, pw, 22, ib); Text("INTERESTING · NOT AT LEVEL", px + 10, cy + 6, pw - 16, 16, smallBold, ib); }
+                            Text(r.InterestText, px, cy + 27, pw, 16, smallRight, ib);
                         }
+                        cy += 26;
+                        Text(r.Warm && mech.Length > 0 ? mech : "", left, cy, headW, 16, small, muted); cy += 16;
+                        Text(r.Detail, left, cy, headW, 16, small, muted); cy += 16 + 6;
                         // gauges
-                        float gy = y + 100, gh = 60, gap = 8, cw = (w - 34 - 2 * gap) / 3, gx = x + 17;
+                        float gy = cy, gap = 8, cw = (innerW - 2 * gap) / 3, gx = left;
                         // 1 efficiency
-                        Rect(gx, gy, cw, gh, card); Rect(gx, gy, 2, gh, r.Burst ? (r.BurstDir > 0 ? teal : coral) : muted);
-                        Text("EFFICIENCY · " + EffBars + " bars", gx + 9, gy + 5, cw - 16, 14, small, muted);
-                        Gauge(gx + 9, gy + 24, cw - 18, r.EffN, -1, 2, new double[] { 0.5, 1.0 }, r.Burst ? (r.EffN < AbsorbBelow ? gold : r.EffN >= ConfirmAbove ? (r.BurstDir > 0 ? teal : coral) : muted) : mutedDim, line, muted, small);
-                        Text((double.IsNaN(r.EffN) ? "effN —" : "effN " + r.EffN.ToString("0.00")) + "  ·  " + (double.IsNaN(r.Eff) ? "" : r.Eff.ToString("0.00") + " pt/100  ·  ") + "Δ " + r.WindowDelta.ToString("+0;-0") + (r.Burst ? "  BURST" : "  floor " + r.Floor.ToString("0")),
-                            gx + 9, gy + 42, cw - 16, 16, small, text);
+                        Rect(gx, gy, cw, gaugeH, card); Rect(gx, gy, 2, gaugeH, r.Burst ? (r.BurstDir > 0 ? teal : coral) : muted);
+                        Text("EFFICIENCY · " + EffBars + " bars" + (r.Burst ? "  ·  BURST" : ""), gx + 9, gy + 5, cw - 16, 14, small, r.Burst ? text : muted);
+                        Gauge(gx + 9, gy + 22, cw - 18, r.EffN, -1, 2, new double[] { 0.5, 1.0 }, r.Burst ? (r.EffN < AbsorbBelow ? gold : r.EffN >= ConfirmAbove ? (r.BurstDir > 0 ? teal : coral) : muted) : mutedDim, line, muted, small);
+                        Text((double.IsNaN(r.EffN) ? "effN —" : "effN " + r.EffN.ToString("0.00")) + "  ·  " + (double.IsNaN(r.Eff) ? "" : r.Eff.ToString("0.00") + " pt/100  ·  ") + "Δ " + r.WindowDelta.ToString("+0;-0") + (r.Burst ? "" : "  ·  floor " + r.Floor.ToString("0")),
+                            gx + 9, gy + 52, cw - 16, 16, small, text);
                         // 2 permanence
                         float g2 = gx + cw + gap; KS.FlowEvent lb = r.LastBurst;
-                        Rect(g2, gy, cw, gh, card); Rect(g2, gy, 2, gh, lb == null ? muted : lb.Verdict == KS.Verdict.Absorbed ? gold : lb.Direction > 0 ? teal : coral);
+                        Rect(g2, gy, cw, gaugeH, card); Rect(g2, gy, 2, gaugeH, lb == null ? muted : lb.Verdict == KS.Verdict.Absorbed ? gold : lb.Direction > 0 ? teal : coral);
                         Text("PERMANENCE · " + (lb == null ? "no burst yet" : lb.VerdictText.ToLowerInvariant() + " " + lb.Price.ToString("0.00")), g2 + 9, gy + 5, cw - 16, 14, small, muted);
                         if (lb != null)
                         {
                             double pv = lb.Alive ? lb.LiveP : !double.IsNaN(lb.P10) ? lb.P10 : lb.P3;
-                            Gauge(g2 + 9, gy + 24, cw - 18, pv, -1, 2, new double[] { 0, 0.5 }, lb.GivenBack ? violet : pv >= 0.5 ? (lb.Direction > 0 ? teal : coral) : gold, line, muted, small);
-                            string seals = lb.Alive ? (lb.BarsSince < PermShort ? "P3 in " + (PermShort - lb.BarsSince) + "  ·  P10 in " + (PermLong - lb.BarsSince) : "P10 in " + (PermLong - lb.BarsSince)) + " bars" : "sealed";
-                            Text("P " + (double.IsNaN(pv) ? "—" : pv.ToString("0.00")) + (lb.GivenBack ? "  GIVEN BACK" : "") + "  ·  P3 " + (double.IsNaN(lb.P3) ? "—" : lb.P3.ToString("0.00")) + "  ·  P10 " + (double.IsNaN(lb.P10) ? "—" : lb.P10.ToString("0.00")) + "  ·  " + seals,
-                                g2 + 9, gy + 42, cw - 16, 16, small, text);
+                            Gauge(g2 + 9, gy + 22, cw - 18, pv, -1, 2, new double[] { 0, 0.5 }, lb.GivenBack ? violet : pv >= 0.5 ? (lb.Direction > 0 ? teal : coral) : gold, line, muted, small);
+                            string seals = lb.Alive ? (lb.BarsSince < PermShort ? "P3 in " + (PermShort - lb.BarsSince) + " · P10 in " + (PermLong - lb.BarsSince) : "P10 in " + (PermLong - lb.BarsSince)) + " bars" : "sealed";
+                            string pv1 = double.IsNaN(pv) ? (lb.Alive ? "move < " + MinBurstMoveTicks.ToString("0") + " ticks" : "—") : "P " + pv.ToString("0.00");
+                            Text(pv1 + (lb.GivenBack ? "  GIVEN BACK" : "") + "  ·  P3 " + (double.IsNaN(lb.P3) ? "—" : lb.P3.ToString("0.00")) + "  ·  P10 " + (double.IsNaN(lb.P10) ? "—" : lb.P10.ToString("0.00")) + "  ·  " + seals,
+                                g2 + 9, gy + 52, cw - 16, 16, small, text);
                         }
-                        else Text("waiting for the first burst ≥ " + r.Floor.ToString("0") + " contracts", g2 + 9, gy + 28, cw - 16, 16, small, muted);
+                        else Text("waiting for the first burst ≥ " + r.Floor.ToString("0") + " contracts", g2 + 9, gy + 30, cw - 16, 16, small, muted);
                         // 3 book and tape
                         float g3 = g2 + cw + gap;
-                        Rect(g3, gy, cw, gh, card); Rect(g3, gy, 2, gh, r.LambdaRegime > 0 ? gold : r.LambdaRegime < 0 ? teal : muted);
+                        Rect(g3, gy, cw, gaugeH, card); Rect(g3, gy, 2, gaugeH, r.LambdaRegime > 0 ? gold : r.LambdaRegime < 0 ? teal : muted);
                         Text("BOOK · TAPE", g3 + 9, gy + 5, cw - 16, 14, small, muted);
-                        string lam = r.LambdaValid ? "λ " + r.LambdaPts100.ToString("0.00") + " pt/100 · " + (r.LambdaRegime > 0 ? "THIN" : r.LambdaRegime < 0 ? "THICK" : "NORMAL") + (double.IsNaN(r.LambdaPct) ? "" : " " + (r.LambdaPct * 100).ToString("0") + "th") : "λ warming";
-                        Text(lam, g3 + 9, gy + 22, cw - 16, 16, small, text);
-                        string tape = "vpin" + VpinBars + " " + (double.IsNaN(r.Vpin) ? "—" : r.Vpin.ToString("0.00")) + (r.VpinQuartile > 0 ? " Q" + r.VpinQuartile : "") + "  ·  tempo " + (double.IsNaN(r.TempoZ) ? "—" : r.TempoZ.ToString("+0.0;-0.0")) + (r.TempoZ <= -1 ? " FAST" : r.TempoZ >= 1 ? " SLOW" : "")
-                            + "  ·  cls " + (double.IsNaN(r.Coverage) ? "—" : (r.Coverage * 100).ToString("0") + "%");
-                        Text(tape, g3 + 9, gy + 38, cw - 16, 16, small, muted);
-                        float ix = g3 + 9, iy = gy + 54, iw = cw - 18;
+                        bool pctReady = !double.IsNaN(r.LambdaPct) && r.BarsClosed >= engine.S.RegimeMinSamples;
+                        string lam = r.LambdaValid ? "λ " + r.LambdaPts100.ToString("0.00") + " pt/100  ·  " + (r.LambdaRegime > 0 ? "THIN" : r.LambdaRegime < 0 ? "THICK" : "NORMAL") + (pctReady ? "  " + (r.LambdaPct * 100).ToString("0") + "th" : "") : "λ warming";
+                        Text(lam, g3 + 9, gy + 21, cw - 16, 16, small, text);
+                        string tape = "vpin" + VpinBars + " " + (double.IsNaN(r.Vpin) ? "—" : r.Vpin.ToString("0.00")) + (r.VpinQuartile > 0 ? " Q" + r.VpinQuartile : "") + "  ·  tempo " + (double.IsNaN(r.TempoZ) ? "—" : r.TempoZ.ToString("+0.0;-0.0")) + (r.TempoZ <= -1 ? " FAST" : r.TempoZ >= 1 ? " SLOW" : "");
+                        Text(tape, g3 + 9, gy + 37, cw - 16, 16, small, muted);
+                        Text("cls " + (double.IsNaN(r.Coverage) ? "—" : (r.Coverage * 100).ToString("0") + "%") + "  ·  I" + (r.HotSide > 0 ? " BUY HOT" : r.HotSide < 0 ? " SELL HOT" : ""), g3 + 9, gy + 53, cw * 0.55f, 16, small, muted);
+                        float ix = g3 + 9 + cw * 0.55f, iy = gy + 59, iw = cw - 18 - cw * 0.55f;
                         double imax = Math.Max(0.5, Math.Max(Math.Max(r.IBuy, r.ISell), Math.Max(r.IBuyMean, r.ISellMean)) * 1.4);
-                        Rect(ix, iy, iw / 2 - 3, 3, line); Rect(ix, iy, (float)(iw / 2 - 3) * (float)Math.Min(1, r.IBuy / imax), 3, r.HotSide > 0 ? teal : tealDim);
-                        Rect(ix + iw / 2 + 3, iy, iw / 2 - 3, 3, line); Rect(ix + iw / 2 + 3, iy, (float)(iw / 2 - 3) * (float)Math.Min(1, r.ISell / imax), 3, r.HotSide < 0 ? coral : coralDim);
+                        Rect(ix, iy, iw / 2 - 3, 4, line); Rect(ix, iy, (iw / 2 - 3) * (float)Math.Min(1, r.IBuy / imax), 4, r.HotSide > 0 ? teal : tealDim);
+                        Rect(ix + iw / 2 + 3, iy, iw / 2 - 3, 4, line); Rect(ix + iw / 2 + 3, iy, (iw / 2 - 3) * (float)Math.Min(1, r.ISell / imax), 4, r.HotSide < 0 ? coral : coralDim);
+                        cy = gy + gaugeH + 12;
                         // strip and sparkline
-                        float sy = gy + gh + 12;
-                        if (ShowStrip && r.Strip.Length > 0)
+                        if (strip)
                         {
-                            Text("LAST " + r.Strip.Length + " BARS · effN at close (guides 0.5 / 1.0) and the character", gx, sy, w - 34, 14, small, muted);
-                            float sx0 = gx, sw = w - 34, sh = 34, cell = sw / r.Strip.Length, spY = sy + 17;
+                            Text("LAST " + r.Strip.Length + " BARS · effN at close (guides 0.5 / 1.0) and the character", left, cy, innerW, 14, small, muted);
+                            float sx0 = left, sw = innerW, sh = 34, cell = sw / r.Strip.Length, spY = cy + 17;
                             Rect(sx0, spY, sw, sh, card);
                             float y05 = spY + sh - (float)((0.5 + 1) / 3 * sh), y10 = spY + sh - (float)((1.0 + 1) / 3 * sh), y0 = spY + sh - (float)(1.0 / 3 * sh);
                             RenderTarget.DrawLine(new Vector2(sx0, y05), new Vector2(sx0 + sw, y05), line, 1); RenderTarget.DrawLine(new Vector2(sx0, y10), new Vector2(sx0 + sw, y10), line, 1);
@@ -279,20 +292,19 @@ namespace NinjaTrader.NinjaScript.Indicators
                                 float ey = spY + sh - (float)((ev + 1) / 3 * sh);
                                 if (c != KS.Character.Warming) Rect(sx0 + i * cell, ey - 1, Math.Max(1, cell - 1), 2, c == KS.Character.BuysAbsorbed || c == KS.Character.SellsAbsorbed ? gold : cb);
                             }
-                            sy = spY + sh + 16;
+                            cy += stripH;
                         }
                         // ribbon of character changes
-                        Text("CHARACTER CHANGES", gx, sy, w - 34, 14, small, muted);
-                        float ry = sy + 16; int rows = 0;
-                        for (int i = changes.Length - 1; i >= 0 && rows < 4; i--, rows++)
+                        Text("CHARACTER CHANGES" + (changes.Length == 0 ? "  ·  none yet" : ""), left, cy, innerW, 14, small, muted);
+                        float ry = cy + 16; int shown = 0;
+                        for (int i = changes.Length - 1; i >= 0 && shown < rows; i--, shown++)
                         {
                             KS.CharacterChange c = changes[i];
                             DxBrush cb = c.Kind == KS.ChangeKind.Regime || c.Kind == KS.ChangeKind.Intensity ? muted : c.Side > 0 ? teal : c.Side < 0 ? coral : muted;
-                            Text(c.Time.ToString("HH:mm:ss"), gx, ry + rows * 16, 60, 15, small, muted);
-                            Text((c.Kind == KS.ChangeKind.Reversal ? "FLIP  " : "") + c.Text + (c.AtLevel ? "  · at level" : ""), gx + 62, ry + rows * 16, w - 34 - 62, 15, c.Kind == KS.ChangeKind.Reversal ? smallBold : small, cb);
+                            Text(c.Time.ToString("HH:mm:ss"), left, ry + shown * rowH, 60, 15, small, muted);
+                            Text((c.Kind == KS.ChangeKind.Reversal ? "FLIP  " : "") + c.Text + (c.AtLevel ? "  · at level" : ""), left + 62, ry + shown * rowH, innerW - 62, 15, c.Kind == KS.ChangeKind.Reversal ? smallBold : small, cb);
                         }
-                        if (changes.Length == 0) Text("none yet", gx, ry, 200, 15, small, muted);
-                        Text("Flow Seriousness Layer · preview · " + r.Time.ToString("HH:mm:ss"), x + 17, y + h - 18, w - 30, 16, small, muted);
+                        Text("Flow Seriousness Layer · preview · " + r.Time.ToString("HH:mm:ss"), left, y + h - 22, innerW, 16, small, muted);
                     }
                     finally { RenderTarget.PopAxisAlignedClip(); }
                 }
@@ -421,6 +433,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         [NinjaScriptProperty, Range(2, 10), Display(Name = "Efficiency window bars", GroupName = "1. Clock", Order = 1)] public int EffBars { get; set; }
         [NinjaScriptProperty, Range(1, 10), Display(Name = "Permanence short (bars)", GroupName = "1. Clock", Order = 2)] public int PermShort { get; set; }
         [NinjaScriptProperty, Range(2, 60), Display(Name = "Permanence long (bars)", GroupName = "1. Clock", Order = 3)] public int PermLong { get; set; }
+        [NinjaScriptProperty, Range(1, 40), Display(Name = "Minimum burst move for permanence (ticks)", GroupName = "1. Clock", Order = 4)] public double MinBurstMoveTicks { get; set; }
         [NinjaScriptProperty, Range(30, 1000), Display(Name = "Lambda window bars", GroupName = "2. Reads", Order = 0)] public int LambdaBars { get; set; }
         [NinjaScriptProperty, Range(5, 200), Display(Name = "Lambda warm-up bars", GroupName = "2. Reads", Order = 1)] public int LambdaWarmup { get; set; }
         [NinjaScriptProperty, Display(Name = "Reset lambda at the 18:00 ET roll", GroupName = "2. Reads", Order = 2)] public bool ResetLambdaAtRoll { get; set; }
@@ -439,7 +452,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         [NinjaScriptProperty, Display(Name = "Read chart lines / rectangles as levels", GroupName = "4. Levels", Order = 0)] public bool UseChartLevels { get; set; }
         [NinjaScriptProperty, Range(0, 100), Display(Name = "Level tolerance (ticks)", GroupName = "4. Levels", Order = 1)] public double LevelToleranceTicks { get; set; }
         [NinjaScriptProperty, Range(300, 1400), Display(Name = "Panel width", GroupName = "5. Display", Order = 0)] public int PanelWidth { get; set; }
-        [NinjaScriptProperty, Range(160, 700), Display(Name = "Panel height", GroupName = "5. Display", Order = 1)] public int DashboardHeight { get; set; }
+        [NinjaScriptProperty, Range(160, 900), Display(Name = "Panel maximum height (the box sizes to its content)", GroupName = "5. Display", Order = 1)] public int DashboardHeight { get; set; }
         [NinjaScriptProperty, Display(Name = "Price markers at events", GroupName = "5. Display", Order = 2)] public bool ShowMarkers { get; set; }
         [NinjaScriptProperty, Display(Name = "Character strip and effN sparkline", GroupName = "5. Display", Order = 3)] public bool ShowStrip { get; set; }
         [NinjaScriptProperty, Display(Name = "Export per-bar CSV (Documents\\FlowSeriousness_exports)", GroupName = "6. Export", Order = 0)] public bool ExportCsv { get; set; }

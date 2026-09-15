@@ -36,6 +36,7 @@ namespace Keystone.Seriousness
         public double Tick = 0.25;
         public int EffBars = 3;                   // window = developing bar + (EffBars - 1) closed bars
         public int PermShort = 3, PermLong = 10;  // permanence labels, in bars after the seal
+        public double MinBurstMoveTicks = 2;      // a burst that moved less than this is absorbed at birth: no permanence tracking, no give-back
         public int LambdaBars = 150, LambdaWarmup = 20;
         public double LambdaMin = 1e-6, LambdaMax = 1.0;
         public bool ResetLambdaAtRoll = false;
@@ -289,9 +290,9 @@ namespace Keystone.Seriousness
             {
                 if (!e.Alive) continue;
                 e.BarsSince = barIndex - e.BarIndex;
-                double span = e.Peak - e.Base;
-                if (e.BarsSince == S.PermShort && Math.Abs(span) >= S.Tick) e.P3 = (b.Close - e.Base) / span;
-                if (e.BarsSince >= S.PermLong) { if (Math.Abs(span) >= S.Tick) e.P10 = (b.Close - e.Base) / span; e.Alive = false; }
+                double span = e.Peak - e.Base; bool tracked = Math.Abs(span) >= S.MinBurstMoveTicks * S.Tick;
+                if (e.BarsSince == S.PermShort && tracked) e.P3 = ClampP((b.Close - e.Base) / span);
+                if (e.BarsSince >= S.PermLong) { if (tracked) e.P10 = ClampP((b.Close - e.Base) / span); e.Alive = false; }
             }
             // exhaustion and bursts are sealed on the closed window.
             int k = S.EffBars;
@@ -381,6 +382,7 @@ namespace Keystone.Seriousness
             distanceTicks = best; return best <= S.LevelToleranceTicks;
         }
         static string F(double p) { return p.ToString("0.00", CultureInfo.InvariantCulture); }
+        static double ClampP(double p) { return Math.Max(-3, Math.Min(3, p)); }
 
         // ---- per tick ----------------------------------------------------------------------------------------
         void Evaluate(DateTime time, DateTime et, double price)
@@ -428,7 +430,7 @@ namespace Keystone.Seriousness
                 if (lb != null && lb.Alive)
                 {
                     double span = lb.Peak - lb.Base;
-                    lb.LiveP = Math.Abs(span) >= S.Tick ? (price - lb.Base) / span : double.NaN;
+                    lb.LiveP = Math.Abs(span) >= S.MinBurstMoveTicks * S.Tick ? ClampP((price - lb.Base) / span) : double.NaN;
                     if (!lb.GivenBack && !double.IsNaN(lb.LiveP) && lb.LiveP < 0)
                     {
                         lb.GivenBack = true;
