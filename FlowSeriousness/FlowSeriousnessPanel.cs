@@ -32,6 +32,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 {
     public class FlowSeriousnessPanel : Indicator
     {
+        public const string Version = "1.1";   // shown in the panel footer so a stale assembly is obvious
         private KS.Engine engine;
         private TimeZoneInfo eastern, platformZone;
         private DateTime lastLevelScan;
@@ -45,7 +46,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             if (State == State.SetDefaults)
             {
                 Name = "FlowSeriousnessPanel";
-                Description = "Flow Seriousness Layer preview: lambda, normalised efficiency, permanence, vpin, intensity and the character headline on the volume-bar clock.";
+                Description = "Flow Seriousness Layer preview " + Version + ": lambda, normalised efficiency, permanence, vpin, intensity and the character headline on the volume-bar clock.";
                 Calculate = Calculate.OnEachTick;
                 IsOverlay = true; DrawOnPricePanel = true; DisplayInDataBox = true;
                 IsSuspendedWhileInactive = false; BarsRequiredToPlot = 0; PaintPriceMarkers = false;
@@ -304,7 +305,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                             Text(c.Time.ToString("HH:mm:ss"), left, ry + shown * rowH, 60, 15, small, muted);
                             Text((c.Kind == KS.ChangeKind.Reversal ? "FLIP  " : "") + c.Text + (c.AtLevel ? "  · at level" : ""), left + 62, ry + shown * rowH, innerW - 62, 15, c.Kind == KS.ChangeKind.Reversal ? smallBold : small, cb);
                         }
-                        Text("Flow Seriousness Layer · preview · " + r.Time.ToString("HH:mm:ss"), left, y + h - 22, innerW, 16, small, muted);
+                        Text("Flow Seriousness Layer · preview " + Version + " · box " + h.ToString("0") + " px · " + r.Time.ToString("HH:mm:ss"), left, y + h - 22, innerW, 16, small, muted);
                     }
                     finally { RenderTarget.PopAxisAlignedClip(); }
                 }
