@@ -143,7 +143,7 @@ namespace Keystone.Seriousness
         public int InterestSide; public string InterestText = ""; public bool InterestAtLevel;
         public bool AtLevel; public double LevelPrice = double.NaN, LevelDistanceTicks = double.NaN;
         public byte[] Strip = new byte[0]; public float[] StripEff = new float[0];
-        public int BarsClosed, NeedBars;
+        public int BarsClosed, NeedBars, LambdaSamples;
     }
 
     public sealed class Engine
@@ -337,7 +337,7 @@ namespace Keystone.Seriousness
                 }
             }
             // strip: the character at the close, and effN at the close.
-            byte code = (byte)displayed; float ef = (float)(Latest != null && !double.IsNaN(Latest.EffN) ? Latest.EffN : 0);
+            byte code = (byte)displayed; float ef = (float)(Latest != null && Latest.Burst && !double.IsNaN(Latest.EffN) ? Latest.EffN : double.NaN);   // no burst = no dash
             Array.Copy(strip, 1, strip, 0, strip.Length - 1); strip[strip.Length - 1] = code;
             Array.Copy(stripEff, 1, stripEff, 0, stripEff.Length - 1); stripEff[stripEff.Length - 1] = ef;
             if (events.Count > S.EventMemory) events.RemoveRange(0, events.Count - S.EventMemory);
@@ -390,7 +390,7 @@ namespace Keystone.Seriousness
             Reading r = new Reading { Time = time, Et = et, Rth = rth, Price = price, BarsClosed = ringCount, NeedBars = NeedBars, Floor = burstFloor };
             int k = S.EffBars;
             r.LambdaValid = lambdaValid; r.Lambda = lambda; r.LambdaPts100 = lambdaValid ? 100 * S.Tick * lambda : double.NaN;
-            r.LambdaPct = lambdaValid ? lamPct : double.NaN; r.LambdaRegime = lamRegime;
+            r.LambdaPct = lambdaValid ? lamPct : double.NaN; r.LambdaRegime = lamRegime; r.LambdaSamples = lamSamples.Count;
             r.Vpin = vCount > 0 ? vSum / vCount : double.NaN; r.VpinPct = vpinPct; r.VpinQuartile = vpinQuartile;
             if (tCount >= 30) { double m = tSum / tCount, variance = Math.Max(0, tSq / tCount - m * m), sd = Math.Sqrt(variance); Bar last = Closed(0); r.TempoZ = sd > 0 && last != null ? (last.DurationSec - m) / sd : double.NaN; }
             r.IBuy = iBuy; r.ISell = iSell; r.IBuyMean = iBuyMean; r.ISellMean = iSellMean; r.HotSide = hotSide;

@@ -32,7 +32,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 {
     public class FlowSeriousnessPanel : Indicator
     {
-        public const string Version = "1.1";   // shown in the panel footer so a stale assembly is obvious
+        public const string Version = "1.2";   // shown in the panel footer so a stale assembly is obvious
         private KS.Engine engine;
         private TimeZoneInfo eastern, platformZone;
         private DateTime lastLevelScan;
@@ -242,8 +242,9 @@ namespace NinjaTrader.NinjaScript.Indicators
                         // 1 efficiency
                         Rect(gx, gy, cw, gaugeH, card); Rect(gx, gy, 2, gaugeH, r.Burst ? (r.BurstDir > 0 ? teal : coral) : muted);
                         Text("EFFICIENCY · " + EffBars + " bars" + (r.Burst ? "  ·  BURST" : ""), gx + 9, gy + 5, cw - 16, 14, small, r.Burst ? text : muted);
-                        Gauge(gx + 9, gy + 22, cw - 18, r.EffN, -1, 2, new double[] { 0.5, 1.0 }, r.Burst ? (r.EffN < AbsorbBelow ? gold : r.EffN >= ConfirmAbove ? (r.BurstDir > 0 ? teal : coral) : muted) : mutedDim, line, muted, small);
-                        Text((double.IsNaN(r.EffN) ? "effN —" : "effN " + r.EffN.ToString("0.00")) + "  ·  " + (double.IsNaN(r.Eff) ? "" : r.Eff.ToString("0.00") + " pt/100  ·  ") + "Δ " + r.WindowDelta.ToString("+0;-0") + (r.Burst ? "" : "  ·  floor " + r.Floor.ToString("0")),
+                        Gauge(gx + 9, gy + 22, cw - 18, r.Burst ? r.EffN : double.NaN, -1, 2, new double[] { 0.5, 1.0 }, r.Burst ? (r.EffN < AbsorbBelow ? gold : r.EffN >= ConfirmAbove ? (r.BurstDir > 0 ? teal : coral) : muted) : mutedDim, line, muted, small);
+                        Text(r.Burst ? (double.IsNaN(r.EffN) ? "effN —" : "effN " + r.EffN.ToString("0.00")) + "  ·  " + (double.IsNaN(r.Eff) ? "" : r.Eff.ToString("0.00") + " pt/100  ·  ") + "Δ " + r.WindowDelta.ToString("+0;-0")
+                                     : "no burst  ·  Δ " + r.WindowDelta.ToString("+0;-0") + " of floor " + r.Floor.ToString("0") + "  ·  move " + r.WindowMove.ToString("+0.00;-0.00"),
                             gx + 9, gy + 52, cw - 16, 16, small, text);
                         // 2 permanence
                         float g2 = gx + cw + gap; KS.FlowEvent lb = r.LastBurst;
@@ -263,7 +264,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                         float g3 = g2 + cw + gap;
                         Rect(g3, gy, cw, gaugeH, card); Rect(g3, gy, 2, gaugeH, r.LambdaRegime > 0 ? gold : r.LambdaRegime < 0 ? teal : muted);
                         Text("BOOK · TAPE", g3 + 9, gy + 5, cw - 16, 14, small, muted);
-                        bool pctReady = !double.IsNaN(r.LambdaPct) && r.BarsClosed >= engine.S.RegimeMinSamples;
+                        bool pctReady = !double.IsNaN(r.LambdaPct) && r.LambdaSamples >= engine.S.RegimeMinSamples;
                         string lam = r.LambdaValid ? "λ " + r.LambdaPts100.ToString("0.00") + " pt/100  ·  " + (r.LambdaRegime > 0 ? "THIN" : r.LambdaRegime < 0 ? "THICK" : "NORMAL") + (pctReady ? "  " + (r.LambdaPct * 100).ToString("0") + "th" : "") : "λ warming";
                         Text(lam, g3 + 9, gy + 21, cw - 16, 16, small, text);
                         string tape = "vpin" + VpinBars + " " + (double.IsNaN(r.Vpin) ? "—" : r.Vpin.ToString("0.00")) + (r.VpinQuartile > 0 ? " Q" + r.VpinQuartile : "") + "  ·  tempo " + (double.IsNaN(r.TempoZ) ? "—" : r.TempoZ.ToString("+0.0;-0.0")) + (r.TempoZ <= -1 ? " FAST" : r.TempoZ >= 1 ? " SLOW" : "");
@@ -289,9 +290,10 @@ namespace NinjaTrader.NinjaScript.Indicators
                                 bool strong = c == KS.Character.BuysAbsorbed || c == KS.Character.SellsAbsorbed || c == KS.Character.SellersExhausted || c == KS.Character.BuyersExhausted || c == KS.Character.BuyGivenBack || c == KS.Character.SellGivenBack || c == KS.Character.BuyersPaid || c == KS.Character.SellersPaid;
                                 DxBrush cb = c == KS.Character.Warming ? line : cs > 0 ? (strong ? teal : tealDim) : cs < 0 ? (strong ? coral : coralDim) : c == KS.Character.TwoWay ? mutedDim : muted;
                                 Rect(sx0 + i * cell, spY + sh + 3, Math.Max(1, cell - 1), 8, cb);
+                                if (float.IsNaN(r.StripEff[i]) || c == KS.Character.Warming) continue;   // dashes only on bars that had a burst
                                 double ev = Math.Max(-1, Math.Min(2, r.StripEff[i]));
                                 float ey = spY + sh - (float)((ev + 1) / 3 * sh);
-                                if (c != KS.Character.Warming) Rect(sx0 + i * cell, ey - 1, Math.Max(1, cell - 1), 2, c == KS.Character.BuysAbsorbed || c == KS.Character.SellsAbsorbed ? gold : cb);
+                                Rect(sx0 + i * cell, ey - 1, Math.Max(1, cell - 1), 2, c == KS.Character.BuysAbsorbed || c == KS.Character.SellsAbsorbed ? gold : cb);
                             }
                             cy += stripH;
                         }
