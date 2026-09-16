@@ -107,6 +107,7 @@ def series(rows):
             "stack": (nb_add - nb_un) - (na_add - na_un),
             "refill_bid": nb_rf / nb_ex if nb_ex > 0 else float("nan"), "refill_ask": na_rf / na_ex if na_ex > 0 else float("nan"),
             "pull_bid": fnum(r["bid_unmatched"]), "pull_ask": fnum(r["ask_unmatched"]),
+            "npull_bid": nb_un, "npull_ask": na_un, "bid_span": fnum(r["bid_span"]), "ask_span": fnum(r["ask_span"]),
             "exec_bid": nb_ex, "exec_ask": na_ex,
             "zone_low": fnum(r["zone_low"]), "zone_high": fnum(r["zone_high"]),
             "zb_ex": fnum(r["zone_bid_executed"]), "zb_rf": fnum(r["zone_bid_refilled"]), "za_ex": fnum(r["zone_ask_executed"]), "za_rf": fnum(r["zone_ask_refilled"]),
@@ -122,6 +123,31 @@ def forward(S, i, h):
     while j < len(S) and S[j]["t"] < t: j += 1
     if j >= len(S) or (S[j]["t"] - t).total_seconds() > 5 or S[i]["price"] <= 0 or S[j]["price"] <= 0: return None
     return S[j]["price"] - S[i]["price"]
+
+
+def backward(S, i, h):
+    """Price change from the last sample at least h seconds before second i to second i, or None."""
+    t = S[i]["t"] - dt.timedelta(seconds=h)
+    j = i - 1
+    while j >= 0 and S[j]["t"] > t: j -= 1
+    if j < 0 or (t - S[j]["t"]).total_seconds() > 5 or S[i]["price"] <= 0 or S[j]["price"] <= 0: return None
+    return S[i]["price"] - S[j]["price"]
+
+
+def partial(S, value, control, h, step):
+    """Correlation of value with the forward move at h, with the control read partialled out; non-overlapping sampling."""
+    xs, ys, zs, last = [], [], [], None
+    for i, s in enumerate(S):
+        if not s["ready"]: continue
+        v = value(s); c = control(S, i)
+        if v is None or c is None or (isinstance(v, float) and math.isnan(v)): continue
+        if last is not None and (s["t"] - last).total_seconds() < step: continue
+        fw = forward(S, i, h)
+        if fw is None: continue
+        xs.append(v); ys.append(fw); zs.append(c); last = s["t"]
+    rxy, n = pearson(xs, ys); rxz, _ = pearson(xs, zs); ryz, _ = pearson(ys, zs)
+    if any(math.isnan(v) for v in (rxy, rxz, ryz)) or rxz * rxz >= 1 or ryz * ryz >= 1: return float("nan"), n
+    return (rxy - rxz * ryz) / math.sqrt((1 - rxz * rxz) * (1 - ryz * ryz)), n
 
 
 def leadlag(S, name, value, step):
@@ -160,6 +186,9 @@ def main():
     n = len(S); ready = sum(1 for s in S if s["ready"]); full = sum(1 for s in S if s["full"])
     print("\nHEALTH   ready %d/%d (%.0f%%)   full band %d/%d (%.0f%%)   resets %d   rejected %d   dropped %d"
           % (ready, n, 100.0 * ready / n, full, n, 100.0 * full / n, S[-1]["resets"], S[-1]["rejected"], S[-1]["dropped"]))
+    spans_b = [s["bid_span"] for s in S if s["ready"] and s["bid_span"] > 0]; spans_a = [s["ask_span"] for s in S if s["ready"] and s["ask_span"] > 0]
+    if spans_b and spans_a:
+        print("         visible depth, median span bid / ask: %.2f / %.2f pts  (set the recorder's band to this; a wider band can never read full)" % (statistics.median(spans_b), statistics.median(spans_a)))
     print("         a lead-lag read below is only as good as the ready share; below ~50% the book is not a continuous witness")
 
     # ---- lead-lag --------------------------------------------------------------------------------------
@@ -174,21 +203,41 @@ def main():
         for name, value in reads:
             _, out = leadlag(S, name, value, step)
             print("          %-24s %s" % (name, "   ".join(("%+.3f %6d" % (c, k)) if not math.isnan(c) else ("   nan %6d" % k) for h, c, k in out)))
+    # control: is the executed read anything more than price having just moved? (net selling and a 30-s down-move are near twins)
+    ctrl = []
+    for h in HORIZONS:
+        xs, ys, last = [], [], None
+        for i, s in enumerate(S):
+            if not s["ready"]: continue
+            b = backward(S, i, 30)
+            if b is None: continue
+            if last is not None and (s["t"] - last).total_seconds() < 30: continue
+            fw = forward(S, i, h)
+            if fw is None: continue
+            xs.append(-b); ys.append(fw); last = s["t"]
+        c, n = pearson(xs, ys); ctrl.append((h, c, n))
+    print("          -- control and partial, every 30 s")
+    print("          %-24s %s" % ("-(past 30 s move)", "   ".join(("%+.3f %6d" % (c, k)) if not math.isnan(c) else ("   nan %6d" % k) for h, c, k in ctrl)))
+    part = [(h,) + partial(S, lambda s: s["exec_bid"] - s["exec_ask"], lambda S_, i: backward(S_, i, 30), h, 30) for h in HORIZONS]
+    print("          %-24s %s" % ("executed | past move out", "   ".join(("%+.3f %6d" % (c, k)) if not math.isnan(c) else ("   nan %6d" % k) for h, c, k in part)))
     print("          sign convention: stack > 0 and refill bid > ask are supportive; r > 0 means the read leads price up")
+    print("          if the control row matches the executed row and the partial row is ~0, the tape read is price mean reversion wearing a flow costume")
 
     # ---- pull events -------------------------------------------------------------------------------------
-    print("\nPULLS     largest one-sided unmatched reductions and what price did in the next 30 s")
-    for side, key, other, sign in (("offers pulled", "pull_ask", "pull_bid", +1), ("bids pulled", "pull_bid", "pull_ask", -1)):
+    print("\nPULLS     largest one-sided NEAR-TOUCH unmatched reductions (within 2 pts) and what price did in the next 30 s")
+    for side, key, other, sign in (("offers pulled", "npull_ask", "npull_bid", +1), ("bids pulled", "npull_bid", "npull_ask", -1)):
         vals = [s[key] for s in S if s["ready"] and s[key] > 0]
         if len(vals) < 50: print("          %-14s n too small (%d ready seconds with a pull)" % (side, len(vals))); continue
-        thr = pct(vals, 0.98); events = []; last = None
+        thr = pct(vals, 0.98); events = []; last = None; above = 0; two_sided = 0
         for i, s in enumerate(S):
-            if not s["ready"] or s[key] < thr or s[other] > 0.5 * s[key]: continue
+            if not s["ready"] or s[key] < thr: continue
+            above += 1
+            if s[other] > 0.75 * s[key]: two_sided += 1; continue
             if last is not None and (s["t"] - last).total_seconds() < 60: continue
             fw = forward(S, i, 30)
             if fw is None: continue
             events.append(fw * sign); last = s["t"]
-        if not events: print("          %-14s no isolated events" % side); continue
+        if not events: print("          %-14s %d seconds above the 98th pct, %d of them two-sided; no isolated events" % (side, above, two_sided)); continue
         through = sum(1 for e in events if e > 0)
         print("          %-14s threshold %5.0f  events %3d  price went through the pulled side %d (%.0f%%)  median %+.2f pts  mean %+.2f pts"
               % (side, thr, len(events), through, 100.0 * through / len(events), statistics.median(events), sum(events) / len(events)))
